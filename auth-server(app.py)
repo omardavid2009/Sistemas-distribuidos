@@ -1,0 +1,64 @@
+from flask import Flask, request, jsonify
+import psycopg2
+import jwt
+import datetime
+from werkzeug.security import generate_password_hash, check_password_hash
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'llave_maestra_jwt'
+
+# IP de la Base de Datos de Usuarios (NO es la de productos)
+IP_DB_USUARIOS = "10.61.157.195"  # ¡PON TU IP AQUÍ!
+
+def get_db_connection():
+    conn = psycopg2.connect(host=IP_DB_USUARIOS, database='usuarios_db', user='admin', password='1234')
+    return conn
+
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    # Encriptamos la contraseña antes de guardarla (Seguridad)
+    hashed_password = generate_password_hash(data['password'], method='sha256')
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('INSERT INTO usuarios (username, password, email) VALUES (%s, %s, %s)',
+                    (data['username'], hashed_password, data['email']))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Usuario creado'}), 201
+    except Exception as e:
+        return jsonify({'message': str(e)}), 400
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT * FROM usuarios WHERE username = %s', (data['username'],))
+    user = cur.fetchone()
+    conn.close()
+
+    # Verificamos hash y generamos Token JWT
+    if user and check_password_hash(user[2], data['password']):
+        token = jwt.encode({
+            'user': user[1],
+            'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=30)
+        }, app.config['SECRET_KEY'])
+        return jsonify({'token': token})
+
+    return jsonify({'message': 'Credenciales invalidas'}), 401
+
+if __name__ == '__main__':
+    # Creamos la tabla si no existe al iniciar
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('''CREATE TABLE IF NOT EXISTS usuarios 
+                     (id SERIAL PRIMARY KEY, username VARCHAR(50) UNIQUE, password TEXT, email VARCHAR(50));''')
+        conn.commit()
+        conn.close()
+    except: pass
+    
+    app.run(host='0.0.0.0', port=5000)
